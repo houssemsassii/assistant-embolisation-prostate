@@ -455,7 +455,6 @@ def load_vector_store():
         return vector_store, hybrid_retriever
     else:
         # Fallback: si pas de chunks.pkl, utiliser uniquement FAISS
-        st.warning("⚠️ Fichier chunks.pkl non trouvé. Utilisation de la recherche vectorielle uniquement.")
         return vector_store, None
 
 
@@ -708,46 +707,13 @@ def show_consent_screen():
 
 def show_loading_screen():
     """
-    Affiche un écran de chargement professionnel pendant l'initialisation.
+    Affiche un écran de chargement simple pendant l'initialisation.
     """
     # Injection du CSS personnalisé
     st.markdown(CUSTOM_CSS, unsafe_allow_html=True)
     
-    st.markdown("""
-    <div style="text-align: center; padding: 4rem 2rem;">
-        <div style="font-size: 5rem; color: var(--primary-color); margin-bottom: 2rem; animation: pulse 2s infinite;">
-            ⚕
-        </div>
-        <h1 style="color: var(--primary-color); font-size: 2rem; margin-bottom: 1rem;">
-            Initialisation de l'assistant médical
-        </h1>
-        <p style="color: var(--text-secondary); font-size: 1.2rem; margin-bottom: 2rem;">
-            Chargement de la base de connaissances médicales...
-        </p>
-        <div style="max-width: 400px; margin: 0 auto;">
-            <div style="background: var(--light-bg); border-radius: 10px; height: 10px; overflow: hidden;">
-                <div style="background: linear-gradient(90deg, var(--primary-color), var(--secondary-color)); 
-                            height: 100%; width: 0%; animation: loading 2s ease-in-out infinite;"></div>
-            </div>
-        </div>
-    </div>
-    
-    <style>
-        @keyframes pulse {
-            0%, 100% { opacity: 1; transform: scale(1); }
-            50% { opacity: 0.7; transform: scale(1.05); }
-        }
-        
-        @keyframes loading {
-            0% { width: 0%; }
-            50% { width: 70%; }
-            100% { width: 100%; }
-        }
-    </style>
-    """, unsafe_allow_html=True)
-    
-    # Chargement effectif des ressources
-    with st.spinner(""):
+    # Chargement avec un simple message spinner
+    with st.spinner("Chargement de la base de connaissances médicales..."):
         if st.session_state.vector_store is None:
             # Charger le vector store et le hybrid retriever
             st.session_state.vector_store, st.session_state.hybrid_retriever = load_vector_store()
@@ -761,8 +727,8 @@ def show_loading_screen():
         # Marquer le chargement comme complet
         st.session_state.loading_complete = True
         
-        # Petit délai pour que l'utilisateur voie l'animation complète
-        time.sleep(1)
+        # Petit délai pour une transition fluide
+        time.sleep(0.5)
         
         # Recharger la page pour afficher l'interface de chat
         st.rerun()
