@@ -76,9 +76,6 @@ Consentement  Chat RAG   Sources
 
 ### Étape 1 : Cloner ou télécharger le projet
 
-```bash
-cd "/Users/sassihoussem/Desktop/Assistant mécial - Embolisation de la prostate"
-```
 
 ### Étape 2 : Créer un environnement virtuel (recommandé)
 
