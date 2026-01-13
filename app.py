@@ -407,7 +407,7 @@ class HybridRetriever(BaseRetriever):
         return final_docs
 
 
-@st.cache_resource
+@st.cache_resource(show_spinner=False)
 def load_vector_store():
     """
     Charge l'index FAISS et crée le retriever hybride (FAISS + BM25).
@@ -691,9 +691,7 @@ def show_consent_screen():
     # Bouton de démarrage
     col1, col2, col3 = st.columns([1, 2, 1])
     with col2:
-        if st.button("Commencer la discussion", type="primary", use_container_width=True, disabled=not consent_checkbox):
-            st.session_state.consent_given = True
-            st.rerun()
+        start_button = st.button("Commencer la discussion", type="primary", use_container_width=True, disabled=not consent_checkbox)
     
     if not consent_checkbox:
         st.markdown("""
@@ -703,34 +701,54 @@ def show_consent_screen():
             </p>
         </div>
         """, unsafe_allow_html=True)
-
-
-def show_loading_screen():
-    """
-    Affiche un écran de chargement simple pendant l'initialisation.
-    """
-    # Injection du CSS personnalisé
-    st.markdown(CUSTOM_CSS, unsafe_allow_html=True)
     
-    # Chargement avec un simple message spinner
-    with st.spinner("Chargement de la base de connaissances médicales..."):
-        if st.session_state.vector_store is None:
-            # Charger le vector store et le hybrid retriever
-            st.session_state.vector_store, st.session_state.hybrid_retriever = load_vector_store()
+    # Si le bouton est cliqué, afficher l'animation de chargement
+    if start_button:
+        st.markdown("<br>", unsafe_allow_html=True)
+        
+        # Animation de chargement élégante
+        st.markdown("""
+        <div style="text-align: center; padding: 2rem 1rem;">
+            <div style="font-size: 3rem; color: var(--primary-color); margin-bottom: 1rem; animation: pulse 2s infinite;">
+                ⚕
+            </div>
+            <p style="color: var(--primary-color); font-size: 1.3rem; font-weight: 600; margin-bottom: 1rem;">
+                Chargement de la base de connaissances médicales...
+            </p>
+            <div style="max-width: 300px; margin: 0 auto;">
+                <div style="background: var(--light-bg); border-radius: 10px; height: 8px; overflow: hidden;">
+                    <div style="background: linear-gradient(90deg, var(--primary-color), var(--secondary-color)); 
+                                height: 100%; width: 0%; animation: loading 2s ease-in-out infinite;"></div>
+                </div>
+            </div>
+        </div>
+        
+        <style>
+            @keyframes pulse {
+                0%, 100% { opacity: 1; transform: scale(1); }
+                50% { opacity: 0.7; transform: scale(1.1); }
+            }
             
-            # Créer la chaîne QA avec le hybrid retriever
+            @keyframes loading {
+                0% { width: 0%; }
+                50% { width: 70%; }
+                100% { width: 100%; }
+            }
+        </style>
+        """, unsafe_allow_html=True)
+        
+        # Charger les ressources
+        if st.session_state.vector_store is None:
+            st.session_state.vector_store, st.session_state.hybrid_retriever = load_vector_store()
             st.session_state.qa_chain = create_qa_chain(
                 st.session_state.vector_store,
                 st.session_state.hybrid_retriever
             )
         
-        # Marquer le chargement comme complet
+        # Marquer comme terminé et passer à l'interface de chat
+        st.session_state.consent_given = True
         st.session_state.loading_complete = True
-        
-        # Petit délai pour une transition fluide
-        time.sleep(0.5)
-        
-        # Recharger la page pour afficher l'interface de chat
+        time.sleep(1)  # Laisser voir l'animation complète
         st.rerun()
 
 
@@ -911,11 +929,8 @@ def main():
     
     # Routing selon l'état de l'application
     if not st.session_state.consent_given:
-        # Écran de consentement
+        # Écran de consentement (qui gère aussi le chargement)
         show_consent_screen()
-    elif not st.session_state.loading_complete:
-        # Écran de chargement après consentement
-        show_loading_screen()
     else:
         # Interface de chat une fois tout chargé
         show_chat_interface()
