@@ -18,7 +18,7 @@ from dotenv import load_dotenv
 from rank_bm25 import BM25Okapi
 
 from langchain_community.vectorstores import FAISS
-from langchain_community.embeddings import HuggingFaceEmbeddings
+from langchain_huggingface import HuggingFaceEmbeddings
 from langchain_classic.chains import RetrievalQA
 from langchain_core.prompts import PromptTemplate
 from langchain_community.llms import OpenAI
