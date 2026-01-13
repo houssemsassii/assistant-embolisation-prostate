@@ -9,11 +9,13 @@ Ne remplace PAS une consultation médicale.
 import os
 import re
 import time
+import pickle
 from pathlib import Path
 from typing import List, Dict, Tuple
 
 import streamlit as st
 from dotenv import load_dotenv
+from rank_bm25 import BM25Okapi
 
 from langchain_community.vectorstores import FAISS
 from langchain_community.embeddings import HuggingFaceEmbeddings
@@ -21,6 +23,9 @@ from langchain_classic.chains import RetrievalQA
 from langchain_core.prompts import PromptTemplate
 from langchain_community.llms import OpenAI
 from langchain_openai import ChatOpenAI
+from langchain_core.documents import Document
+from langchain_core.retrievers import BaseRetriever
+from langchain_core.callbacks import CallbackManagerForRetrieverRun
 
 # Chargement des variables d'environnement
 load_dotenv()
@@ -328,6 +333,9 @@ def init_session_state():
     if "vector_store" not in st.session_state:
         st.session_state.vector_store = None
     
+    if "hybrid_retriever" not in st.session_state:
+        st.session_state.hybrid_retriever = None
+    
     if "qa_chain" not in st.session_state:
         st.session_state.qa_chain = None
     
@@ -335,31 +343,120 @@ def init_session_state():
         st.session_state.loading_complete = False
 
 
+# ============================================
+# HYBRID RETRIEVAL
+# ============================================
+
+class HybridRetriever(BaseRetriever):
+    """
+    Retriever hybride combinant recherche vectorielle (FAISS) et recherche par mots-clés (BM25).
+    Utilise Reciprocal Rank Fusion (RRF) pour combiner les résultats.
+    """
+    
+    vector_store: FAISS
+    bm25: BM25Okapi
+    chunks: List[Document]
+    k: int = 4
+    alpha: float = 0.5  # Poids pour la recherche vectorielle (0.5 = équilibré)
+    
+    class Config:
+        arbitrary_types_allowed = True
+    
+    def _get_relevant_documents(
+        self, query: str, *, run_manager: CallbackManagerForRetrieverRun = None
+    ) -> List[Document]:
+        """
+        Récupère les documents pertinents en combinant recherche vectorielle et BM25.
+        """
+        # 1. Recherche vectorielle (sémantique)
+        vector_docs = self.vector_store.similarity_search(query, k=self.k * 2)
+        
+        # 2. Recherche BM25 (mots-clés)
+        tokenized_query = query.lower().split()
+        bm25_scores = self.bm25.get_scores(tokenized_query)
+        
+        # Obtenir les top k indices pour BM25
+        bm25_top_indices = sorted(
+            range(len(bm25_scores)), 
+            key=lambda i: bm25_scores[i], 
+            reverse=True
+        )[:self.k * 2]
+        
+        bm25_docs = [self.chunks[i] for i in bm25_top_indices]
+        
+        # 3. Reciprocal Rank Fusion (RRF)
+        doc_scores = {}
+        
+        # Scores from vector search
+        for rank, doc in enumerate(vector_docs):
+            doc_id = doc.page_content
+            doc_scores[doc_id] = doc_scores.get(doc_id, 0) + self.alpha / (rank + 60)
+        
+        # Scores from BM25
+        for rank, doc in enumerate(bm25_docs):
+            doc_id = doc.page_content
+            doc_scores[doc_id] = doc_scores.get(doc_id, 0) + (1 - self.alpha) / (rank + 60)
+        
+        # Trier par score et retourner les top k
+        sorted_docs = sorted(doc_scores.items(), key=lambda x: x[1], reverse=True)[:self.k]
+        
+        # Reconstituer les documents
+        doc_map = {doc.page_content: doc for doc in vector_docs + bm25_docs}
+        final_docs = [doc_map[doc_id] for doc_id, _ in sorted_docs if doc_id in doc_map]
+        
+        return final_docs
+
+
 @st.cache_resource
 def load_vector_store():
     """
-    Charge l'index FAISS (mis en cache).
+    Charge l'index FAISS et crée le retriever hybride (FAISS + BM25).
     
     Returns:
-        Vector store FAISS
+        Tuple (vector_store, hybrid_retriever)
     """
     if not VECTOR_STORE_DIR.exists():
         st.error("INDEX VECTORIEL NON TROUVÉ. Veuillez d'abord exécuter `python ingest.py`")
         st.stop()
     
+    # 1. Charger les embeddings
     embeddings = HuggingFaceEmbeddings(
         model_name=EMBEDDING_MODEL,
         model_kwargs={'device': 'cpu'},
         encode_kwargs={'normalize_embeddings': True}
     )
     
+    # 2. Charger le vector store FAISS
     vector_store = FAISS.load_local(
         str(VECTOR_STORE_DIR),
         embeddings,
         allow_dangerous_deserialization=True
     )
     
-    return vector_store
+    # 3. Charger les chunks pour BM25
+    chunks_file = VECTOR_STORE_DIR / "chunks.pkl"
+    if chunks_file.exists():
+        with open(chunks_file, 'rb') as f:
+            chunks = pickle.load(f)
+        
+        # 4. Créer l'index BM25
+        tokenized_chunks = [chunk.page_content.lower().split() for chunk in chunks]
+        bm25 = BM25Okapi(tokenized_chunks)
+        
+        # 5. Créer le hybrid retriever
+        hybrid_retriever = HybridRetriever(
+            vector_store=vector_store,
+            bm25=bm25,
+            chunks=chunks,
+            k=TOP_K,
+            alpha=0.6  # 60% vector search, 40% keyword search
+        )
+        
+        return vector_store, hybrid_retriever
+    else:
+        # Fallback: si pas de chunks.pkl, utiliser uniquement FAISS
+        st.warning("⚠️ Fichier chunks.pkl non trouvé. Utilisation de la recherche vectorielle uniquement.")
+        return vector_store, None
 
 
 def get_llm():
@@ -401,12 +498,14 @@ def get_llm():
         st.stop()
 
 
-def create_qa_chain(vector_store):
+def create_qa_chain(vector_store, hybrid_retriever=None):
     """
     Crée la chaîne RAG avec le prompt système.
+    Utilise le hybrid retriever si disponible, sinon FAISS seul.
     
     Args:
         vector_store: Vector store FAISS
+        hybrid_retriever: Retriever hybride (optionnel)
         
     Returns:
         Chaîne RetrievalQA
@@ -421,10 +520,16 @@ def create_qa_chain(vector_store):
             input_variables=["context", "question"]
         )
         
+        # Utiliser le hybrid retriever si disponible, sinon FAISS
+        if hybrid_retriever is not None:
+            retriever = hybrid_retriever
+        else:
+            retriever = vector_store.as_retriever(search_kwargs={"k": TOP_K})
+        
         qa_chain = RetrievalQA.from_chain_type(
             llm=llm,
             chain_type="stuff",
-            retriever=vector_store.as_retriever(search_kwargs={"k": TOP_K}),
+            retriever=retriever,
             return_source_documents=True,
             chain_type_kwargs={"prompt": prompt}
         )
@@ -644,8 +749,14 @@ def show_loading_screen():
     # Chargement effectif des ressources
     with st.spinner(""):
         if st.session_state.vector_store is None:
-            st.session_state.vector_store = load_vector_store()
-            st.session_state.qa_chain = create_qa_chain(st.session_state.vector_store)
+            # Charger le vector store et le hybrid retriever
+            st.session_state.vector_store, st.session_state.hybrid_retriever = load_vector_store()
+            
+            # Créer la chaîne QA avec le hybrid retriever
+            st.session_state.qa_chain = create_qa_chain(
+                st.session_state.vector_store,
+                st.session_state.hybrid_retriever
+            )
         
         # Marquer le chargement comme complet
         st.session_state.loading_complete = True
@@ -785,10 +896,15 @@ Pour toute question concernant votre situation personnelle, veuillez consulter v
         st.divider()
         
         st.markdown('<h3 style="color: var(--primary-color);">⚙ Configuration technique</h3>', unsafe_allow_html=True)
+        
+        # Déterminer le mode de retrieval
+        retrieval_mode = "Hybrid (Vector + Keyword)" if st.session_state.hybrid_retriever else "Vector Only"
+        
         st.markdown(f"""
         <div class="info-card">
             <p style="margin:0.25rem 0;"><strong>Modèle:</strong> {MODEL_NAME}</p>
             <p style="margin:0.25rem 0;"><strong>Provider:</strong> {LLM_PROVIDER}</p>
+            <p style="margin:0.25rem 0;"><strong>Retrieval:</strong> {retrieval_mode}</p>
             <p style="margin:0.25rem 0;"><strong>Température:</strong> {TEMPERATURE}</p>
             <p style="margin:0.25rem 0;"><strong>Documents par requête:</strong> {TOP_K}</p>
         </div>
