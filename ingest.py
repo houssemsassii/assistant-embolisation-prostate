@@ -18,7 +18,6 @@ from langchain.text_splitter import RecursiveCharacterTextSplitter
 from langchain_community.document_loaders import PyPDFLoader
 from langchain_community.vectorstores import FAISS
 from langchain_huggingface import HuggingFaceEmbeddings
-from langchain_experimental.text_splitter import SemanticChunker
 from dotenv import load_dotenv
 
 # Chargement des variables d'environnement
@@ -31,10 +30,7 @@ load_dotenv()
 PDF_DIR = Path("data/pdfs")
 VECTOR_STORE_DIR = Path("vector_store")
 
-# Configuration pour semantic chunking
-USE_SEMANTIC_CHUNKING = os.getenv("USE_SEMANTIC_CHUNKING", "true").lower() == "true"
-
-# Fallback configuration si semantic chunking échoue
+# Configuration pour chunking optimisé
 CHUNK_SIZE = int(os.getenv("CHUNK_SIZE", "500"))
 CHUNK_OVERLAP = int(os.getenv("CHUNK_OVERLAP", "100"))
 
@@ -99,62 +95,9 @@ def load_pdfs(pdf_directory: Path) -> List:
     return all_documents
 
 
-def split_documents_semantic(documents: List, embeddings) -> List:
+def split_documents(documents: List) -> List:
     """
-    Découpe les documents en utilisant le semantic chunking.
-    Les chunks sont créés en fonction de la similarité sémantique du contenu.
-    
-    Args:
-        documents: Liste de documents LangChain
-        embeddings: Modèle d'embeddings pour le semantic chunking
-        
-    Returns:
-        Liste de chunks avec métadonnées préservées
-    """
-    print(f"\n✂️  Découpage sémantique des documents...")
-    print(f"   Méthode: Semantic Chunking (basé sur similarité sémantique)")
-    print(f"   ⏳ Analyse de la structure sémantique en cours...")
-    
-    try:
-        # Semantic chunker avec percentile breakpoint
-        text_splitter = SemanticChunker(
-            embeddings,
-            breakpoint_threshold_type="percentile",
-            breakpoint_threshold_amount=80  # Seuil de similarité
-        )
-        
-        chunks = text_splitter.split_documents(documents)
-        
-        print(f"   ✅ {len(chunks)} chunk(s) sémantique(s) créé(s)")
-        
-        # Statistiques sur la taille des chunks
-        chunk_sizes = [len(chunk.page_content) for chunk in chunks]
-        if chunk_sizes:
-            avg_size = sum(chunk_sizes) / len(chunk_sizes)
-            min_size = min(chunk_sizes)
-            max_size = max(chunk_sizes)
-            print(f"   📊 Statistiques des chunks:")
-            print(f"      - Taille moyenne: {int(avg_size)} caractères")
-            print(f"      - Taille min: {min_size} caractères")
-            print(f"      - Taille max: {max_size} caractères")
-        
-    except Exception as e:
-        print(f"   ⚠️ Erreur lors du semantic chunking: {e}")
-        print(f"   🔄 Basculement vers RecursiveCharacterTextSplitter...")
-        return split_documents_recursive(documents)
-    
-    # Affichage d'un exemple de chunk pour vérification
-    if chunks:
-        print(f"\n📝 Exemple de chunk sémantique (premier):")
-        print(f"   Source: {chunks[0].metadata.get('source_file', 'N/A')}")
-        print(f"   Contenu (100 premiers caractères): {chunks[0].page_content[:100]}...")
-    
-    return chunks
-
-
-def split_documents_recursive(documents: List) -> List:
-    """
-    Découpe les documents avec RecursiveCharacterTextSplitter (fallback).
+    Découpe les documents avec RecursiveCharacterTextSplitter optimisé.
     
     Args:
         documents: Liste de documents LangChain
@@ -162,7 +105,7 @@ def split_documents_recursive(documents: List) -> List:
     Returns:
         Liste de chunks avec métadonnées préservées
     """
-    print(f"\n✂️  Découpage récursif des documents...")
+    print(f"\n✂️  Découpage intelligent des documents...")
     print(f"   Taille de chunk: {CHUNK_SIZE} caractères")
     print(f"   Chevauchement: {CHUNK_OVERLAP} caractères")
     
@@ -267,20 +210,17 @@ def main():
     print("=" * 70)
     print("🏥 INGESTION DES DOCUMENTS MÉDICAUX")
     print("   Embolisation de la prostate - Base de connaissances RAG")
-    print("   Features: Semantic Chunking + Hybrid Retrieval")
+    print("   Features: Intelligent Chunking + Hybrid Retrieval")
     print("=" * 70)
     
     # 1. Chargement des PDFs
     documents = load_pdfs(PDF_DIR)
     
-    # 2. Création des embeddings (nécessaire avant le semantic chunking)
-    embeddings = create_embeddings()
+    # 2. Découpage en chunks
+    chunks = split_documents(documents)
     
-    # 3. Découpage en chunks (sémantique ou récursif)
-    if USE_SEMANTIC_CHUNKING:
-        chunks = split_documents_semantic(documents, embeddings)
-    else:
-        chunks = split_documents_recursive(documents)
+    # 3. Création des embeddings
+    embeddings = create_embeddings()
     
     # 4. Construction de l'index vectoriel
     vector_store = build_vector_store(chunks, embeddings)
@@ -294,7 +234,7 @@ def main():
     print(f"\n📊 Statistiques:")
     print(f"   • Documents traités: {len(documents)} pages")
     print(f"   • Chunks créés: {len(chunks)}")
-    print(f"   • Méthode: {'Semantic Chunking' if USE_SEMANTIC_CHUNKING else 'Recursive Chunking'}")
+    print(f"   • Méthode: Intelligent Recursive Chunking")
     print(f"   • Index sauvegardé: {VECTOR_STORE_DIR}/")
     print(f"\n🚀 Vous pouvez maintenant lancer l'application:")
     print(f"   streamlit run app.py")
