@@ -1,0 +1,27 @@
+# Core dependencies - Versions compatibles testées
+streamlit==1.31.0
+langchain==1.2.3
+langchain-community==0.4.1
+langchain-core==1.2.7
+langchain-classic==1.0.1
+langchain-text-splitters==1.1.0
+
+# Vector store and embeddings
+faiss-cpu==1.7.4
+sentence-transformers==2.3.1
+
+# PDF processing
+pypdf==4.0.1
+
+# LLM providers - Versions compatibles
+openai==2.15.0
+langchain-openai==1.1.7
+groq==0.37.1
+langchain-groq==1.1.1
+
+# Utilities
+python-dotenv==1.0.1
+tiktoken==0.12.0
+
+# Pydantic v2 pour compatibilité
+pydantic==2.12.5
