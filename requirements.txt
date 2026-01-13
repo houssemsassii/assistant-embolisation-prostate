@@ -1,5 +1,5 @@
 # Core dependencies - Versions compatibles testées
-streamlit==1.31.0
+streamlit>=1.40.0
 langchain==1.2.3
 langchain-community==0.4.1
 langchain-core==1.2.7
