@@ -17,7 +17,7 @@ pypdf==4.0.1
 
 # Web scraping
 beautifulsoup4==4.12.3
-lxml==5.1.0
+lxml>=5.3.0
 
 # LLM providers - Versions compatibles
 openai==2.15.0
