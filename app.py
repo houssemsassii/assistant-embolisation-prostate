@@ -1,6 +1,7 @@
 """
-Assistant médical RAG - Embolisation de la prostate
+Assistant médical RAG - Radiologie Interventionnelle
 Application Streamlit avec consentement obligatoire et protection des données.
+Couvre toutes les procédures de radiologie interventionnelle (embolisation, biopsies, etc.)
 
 USAGE MÉDICAL - POC à des fins d'information générale uniquement.
 Ne remplace PAS une consultation médicale.
@@ -40,6 +41,23 @@ TOP_K = int(os.getenv("TOP_K_RETRIEVAL", "4"))
 TEMPERATURE = float(os.getenv("TEMPERATURE", "0.1"))
 LLM_PROVIDER = os.getenv("LLM_PROVIDER", "groq")
 MODEL_NAME = os.getenv("MODEL_NAME", "llama-3.3-70b-versatile")
+
+# Liste des procédures disponibles (basée sur les métadonnées dans vector_store)
+AVAILABLE_PROCEDURES = [
+    "Toutes les procédures",
+    "Embolisation de la prostate",
+    "Embolisation utérine",
+    "Pose Chambre Implantable",
+    "Biopsie Sous Scanner",
+    "Arthrose du genou (gonarthrose)",
+    "Épaule gelée (capsulite rétractile)",
+    "Varicocèle",
+    "Hémorroïdes",
+    "Douleurs à la marche",
+    "Grosse jambe post-phlébite",
+    "Cancer",
+    "Douleurs osseuses",
+]
 
 # ============================================
 # CUSTOM CSS
@@ -244,7 +262,7 @@ CUSTOM_CSS = """
 # PROMPTS SYSTÈME (SÉCURITÉ MÉDICALE)
 # ============================================
 
-SYSTEM_PROMPT_TEMPLATE = """Tu es un assistant médical spécialisé dans l'information sur l'embolisation de la prostate.
+SYSTEM_PROMPT_TEMPLATE = """Tu es un assistant médical spécialisé dans l'information sur les procédures de radiologie interventionnelle (embolisations, biopsies, poses de PAC, etc.).
 
 RÈGLES DE SÉCURITÉ ABSOLUES (À RESPECTER IMPÉRATIVEMENT):
 
@@ -341,6 +359,9 @@ def init_session_state():
     
     if "loading_complete" not in st.session_state:
         st.session_state.loading_complete = False
+    
+    if "selected_procedure" not in st.session_state:
+        st.session_state.selected_procedure = "Toutes les procédures"
 
 
 # ============================================
@@ -351,6 +372,7 @@ class HybridRetriever(BaseRetriever):
     """
     Retriever hybride combinant recherche vectorielle (FAISS) et recherche par mots-clés (BM25).
     Utilise Reciprocal Rank Fusion (RRF) pour combiner les résultats.
+    Supporte le filtrage par procédure pour des recherches ciblées.
     """
     
     vector_store: FAISS
@@ -358,6 +380,7 @@ class HybridRetriever(BaseRetriever):
     chunks: List[Document]
     k: int = 4
     alpha: float = 0.5  # Poids pour la recherche vectorielle (0.5 = équilibré)
+    selected_procedure: str = "Toutes les procédures"  # Filtre de procédure
     
     class Config:
         arbitrary_types_allowed = True
@@ -367,24 +390,37 @@ class HybridRetriever(BaseRetriever):
     ) -> List[Document]:
         """
         Récupère les documents pertinents en combinant recherche vectorielle et BM25.
+        Filtre par procédure si spécifié.
         """
-        # 1. Recherche vectorielle (sémantique)
-        vector_docs = self.vector_store.similarity_search(query, k=self.k * 2)
+        # 1. Recherche vectorielle (sémantique) - rechercher plus de documents pour le filtrage
+        search_k = self.k * 4 if self.selected_procedure != "Toutes les procédures" else self.k * 2
+        vector_docs = self.vector_store.similarity_search(query, k=search_k)
         
         # 2. Recherche BM25 (mots-clés)
         tokenized_query = query.lower().split()
         bm25_scores = self.bm25.get_scores(tokenized_query)
         
-        # Obtenir les top k indices pour BM25
+        # Obtenir les top indices pour BM25
         bm25_top_indices = sorted(
             range(len(bm25_scores)), 
             key=lambda i: bm25_scores[i], 
             reverse=True
-        )[:self.k * 2]
+        )[:search_k]
         
         bm25_docs = [self.chunks[i] for i in bm25_top_indices]
         
-        # 3. Reciprocal Rank Fusion (RRF)
+        # 3. Filtrage par procédure si nécessaire
+        if self.selected_procedure != "Toutes les procédures":
+            vector_docs = [
+                doc for doc in vector_docs 
+                if doc.metadata.get('procedure', '') == self.selected_procedure
+            ]
+            bm25_docs = [
+                doc for doc in bm25_docs 
+                if doc.metadata.get('procedure', '') == self.selected_procedure
+            ]
+        
+        # 4. Reciprocal Rank Fusion (RRF)
         doc_scores = {}
         
         # Scores from vector search
@@ -474,7 +510,8 @@ def get_llm():
         return ChatOpenAI(
             model=MODEL_NAME,
             temperature=TEMPERATURE,
-            api_key=api_key
+            api_key=api_key,
+            max_tokens=8000  # Pas de limitation stricte sur la longueur de réponse
         )
     
     elif LLM_PROVIDER == "groq":
@@ -489,7 +526,8 @@ def get_llm():
         return ChatGroq(
             model=MODEL_NAME,
             temperature=TEMPERATURE,
-            groq_api_key=api_key
+            groq_api_key=api_key,
+            max_tokens=8000  # Pas de limitation stricte sur la longueur de réponse
         )
     
     else:
@@ -581,7 +619,7 @@ def show_consent_screen():
     <div style="text-align: center; margin-bottom: 2rem;">
         <div style="font-size: 4rem; color: var(--primary-color); margin-bottom: 1rem;">⚕</div>
         <h1 class="main-title" style="border-bottom: none;">Assistant d'information médical</h1>
-        <p class="subtitle">Embolisation de la prostate</p>
+        <p class="subtitle">Radiologie Interventionnelle</p>
     </div>
     """, unsafe_allow_html=True)
     
@@ -589,10 +627,102 @@ def show_consent_screen():
     st.markdown("""
     <div class="info-card">
         <p>Cet assistant a été conçu pour vous fournir <strong>des informations générales</strong> 
-        sur la procédure d'embolisation de la prostate, les étapes pré-opératoires et post-opératoires, 
+        sur les différentes procédures de radiologie interventionnelle (embolisation prostatique et utérine, 
+        pose de PAC, biopsies sous scanner, etc.), les étapes pré-opératoires et post-opératoires, 
         ainsi que des réponses aux questions fréquentes.</p>
     </div>
     """, unsafe_allow_html=True)
+    
+    # SÉLECTION DE LA PROCÉDURE - EN HAUT DE PAGE
+    st.markdown("""
+    <div style="background: linear-gradient(135deg, #E3F2FD 0%, #BBDEFB 100%); 
+                border: 4px solid var(--primary-color); 
+                border-radius: 16px; 
+                padding: 2.5rem; 
+                margin: 2.5rem 0;
+                box-shadow: 0 10px 30px rgba(44, 95, 141, 0.25);">
+        <h2 style="color: var(--primary-color); 
+                   font-size: 2.2rem; 
+                   font-weight: 700; 
+                   text-align: center; 
+                   margin: 0 0 1.5rem 0;
+                   text-transform: uppercase;
+                   letter-spacing: 1px;">
+            🎯 ÉTAPE 1 : SÉLECTIONNEZ VOTRE PROCÉDURE
+        </h2>
+        <p style="font-size: 1.3rem; 
+                  color: var(--text-primary); 
+                  text-align: center; 
+                  margin-bottom: 0.5rem;
+                  line-height: 1.6;
+                  font-weight: 600;">
+            Quelle procédure vous intéresse ?
+        </p>
+        <p style="font-size: 1.05rem; 
+                  color: var(--text-secondary); 
+                  text-align: center; 
+                  margin-bottom: 0;">
+            Sélectionnez une procédure pour obtenir des réponses <strong>ciblées, rapides et précises</strong>.
+        </p>
+    </div>
+    """, unsafe_allow_html=True)
+    
+    # Sélecteur de procédure avec style amélioré
+    st.markdown("""
+    <style>
+    .stSelectbox > div > div {
+        font-size: 1.15rem !important;
+        font-weight: 600 !important;
+    }
+    .stSelectbox label {
+        font-size: 1.3rem !important;
+        font-weight: 700 !important;
+        color: var(--primary-color) !important;
+    }
+    </style>
+    """, unsafe_allow_html=True)
+    
+    selected_procedure = st.selectbox(
+        "📋 Procédure concernée :",
+        options=AVAILABLE_PROCEDURES,
+        index=0,
+        help="Sélectionnez une procédure spécifique ou 'Toutes les procédures' pour une recherche générale"
+    )
+    
+    # Stocker le choix dans session_state
+    st.session_state.selected_procedure = selected_procedure
+    
+    # Affichage du choix avec icône - plus visible
+    if selected_procedure != "Toutes les procédures":
+        st.markdown(f"""
+        <div style="background: linear-gradient(135deg, #C8E6C9 0%, #A5D6A7 100%);
+                    border: 3px solid var(--success-color);
+                    border-radius: 12px;
+                    padding: 1.8rem;
+                    margin: 1.5rem 0 2rem 0;
+                    text-align: center;
+                    box-shadow: 0 6px 16px rgba(82, 183, 136, 0.25);">
+            <p style="margin:0; font-size: 1.4rem; font-weight: 700; color: #2E7D32;">
+                ✓ Recherche ciblée activée
+            </p>
+            <p style="margin:0.7rem 0 0 0; font-size: 1.2rem; color: #388E3C; font-weight: 600;">
+                {selected_procedure}
+            </p>
+        </div>
+        """, unsafe_allow_html=True)
+    else:
+        st.markdown("""
+        <div style="background: #FFF8E1;
+                    border: 2px solid #FFB300;
+                    border-radius: 12px;
+                    padding: 1.5rem;
+                    margin: 1.5rem 0 2rem 0;
+                    text-align: center;">
+            <p style="margin:0; font-size: 1.2rem; font-weight: 600; color: #F57C00;">
+                📚 Recherche générale sur toutes les procédures
+            </p>
+        </div>
+        """, unsafe_allow_html=True)
     
     # Avertissements importants
     st.markdown('<h2 class="section-header">⚠ Avertissements importants</h2>', unsafe_allow_html=True)
@@ -739,7 +869,22 @@ def show_consent_screen():
         
         # Charger les ressources
         if st.session_state.vector_store is None:
-            st.session_state.vector_store, st.session_state.hybrid_retriever = load_vector_store()
+            st.session_state.vector_store, base_hybrid_retriever = load_vector_store()
+            
+            # Créer un retriever avec la procédure sélectionnée
+            if base_hybrid_retriever is not None:
+                # Créer un nouveau retriever avec le filtre de procédure
+                st.session_state.hybrid_retriever = HybridRetriever(
+                    vector_store=st.session_state.vector_store,
+                    bm25=base_hybrid_retriever.bm25,
+                    chunks=base_hybrid_retriever.chunks,
+                    k=TOP_K,
+                    alpha=0.6,
+                    selected_procedure=st.session_state.selected_procedure
+                )
+            else:
+                st.session_state.hybrid_retriever = None
+            
             st.session_state.qa_chain = create_qa_chain(
                 st.session_state.vector_store,
                 st.session_state.hybrid_retriever
@@ -763,7 +908,7 @@ def show_chat_interface():
     st.markdown("""
     <div style="display: flex; align-items: center; margin-bottom: 1.5rem;">
         <div style="font-size: 2.5rem; color: var(--primary-color); margin-right: 1rem;">⚕</div>
-        <h1 class="main-title" style="margin: 0; border: none; padding: 0;">Assistant : Embolisation de la prostate</h1>
+        <h1 class="main-title" style="margin: 0; border: none; padding: 0;">Assistant : Radiologie Interventionnelle</h1>
     </div>
     """, unsafe_allow_html=True)
     
@@ -785,15 +930,30 @@ def show_chat_interface():
             if message["role"] == "assistant" and "sources" in message:
                 with st.expander("Sources documentaires utilisées"):
                     for i, source in enumerate(message["sources"], 1):
+                        # Compatibilité avec ancien format (file) et nouveau format (name)
+                        source_display = source.get('name', source.get('file', 'Document'))
+                        if source.get('url'):
+                            source_display += f" ({source['url']})"
+                        
+                        # Affichage de la source avec expandeur pour le texte complet
                         st.markdown(f"""
                         <div class="source-container">
-                            <div class="source-title">Source {i}: {source['file']}</div>
-                            <div class="source-content">{source['content'][:250]}...</div>
+                            <div class="source-title">Source {i}: {source_display}</div>
                         </div>
                         """, unsafe_allow_html=True)
+                        
+                        # Expandeur pour voir le contenu complet de chaque source
+                        with st.expander(f"📄 Voir le contenu complet de la source {i}", expanded=False):
+                            st.markdown(f"""
+                            <div style="background: #f8f9fa; padding: 1rem; border-radius: 8px; 
+                                        font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+                                        line-height: 1.6; color: #2c3e50;">
+                                {source['content']}
+                            </div>
+                            """, unsafe_allow_html=True)
     
     # Input utilisateur
-    if question := st.chat_input("Posez votre question sur l'embolisation de la prostate..."):
+    if question := st.chat_input("Posez votre question sur les procédures de radiologie interventionnelle..."):
         
         # Vérification des données personnelles
         if detect_personal_data(question):
@@ -806,7 +966,7 @@ def show_chat_interface():
             refusal_message = """
 **Je ne peux pas traiter d'informations personnelles.**
 
-Merci de poser uniquement des **questions générales** sur l'embolisation de la prostate.
+Merci de poser uniquement des **questions générales** sur les procédures de radiologie interventionnelle.
 
 Pour toute question concernant votre situation personnelle, veuillez consulter votre médecin.
             """
@@ -839,21 +999,49 @@ Pour toute question concernant votre situation personnelle, veuillez consulter v
                         # Extraction des sources
                         sources = []
                         for doc in source_docs:
+                            # Déterminer le type de source
+                            source_type = doc.metadata.get("source_type", "pdf")
+                            
+                            if source_type == "web":
+                                # Source web : afficher l'URL et le nom de la procédure
+                                source_name = f"Site web - {doc.metadata.get('procedure', 'laradiologiequisoigne.fr')}"
+                                source_url = doc.metadata.get("source_url", "")
+                            else:
+                                # Source PDF : afficher le nom du fichier
+                                source_name = f"Document - {doc.metadata.get('source_file', 'Document PDF')}"
+                                source_url = None
+                            
                             sources.append({
-                                "file": doc.metadata.get("source_file", "Document"),
-                                "content": doc.page_content
+                                "name": source_name,
+                                "url": source_url,
+                                "content": doc.page_content,
+                                "type": source_type
                             })
                         
                         # Affichage des sources
                         if sources:
                             with st.expander("Sources documentaires utilisées"):
                                 for i, source in enumerate(sources, 1):
+                                    source_display = source['name']
+                                    if source['url']:
+                                        source_display += f" ({source['url']})"
+                                    
+                                    # Affichage de la source avec expandeur pour le texte complet
                                     st.markdown(f"""
                                     <div class="source-container">
-                                        <div class="source-title">Source {i}: {source['file']}</div>
-                                        <div class="source-content">{source['content'][:250]}...</div>
+                                        <div class="source-title">Source {i}: {source_display}</div>
                                     </div>
                                     """, unsafe_allow_html=True)
+                                    
+                                    # Expandeur pour voir le contenu complet de chaque source
+                                    with st.expander(f"📄 Voir le contenu complet de la source {i}", expanded=False):
+                                        st.markdown(f"""
+                                        <div style="background: #f8f9fa; padding: 1rem; border-radius: 8px; 
+                                                    font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+                                                    line-height: 1.6; color: #2c3e50;">
+                                            {source['content']}
+                                        </div>
+                                        """, unsafe_allow_html=True)
                         
                         # Sauvegarde dans l'historique
                         st.session_state.messages.append({
@@ -879,20 +1067,45 @@ Pour toute question concernant votre situation personnelle, veuillez consulter v
         
         st.divider()
         
-        st.markdown('<h3 style="color: var(--primary-color);">⚙ Configuration technique</h3>', unsafe_allow_html=True)
+        # Section Procédure ciblée
+        st.markdown('<h3 style="color: var(--primary-color);">🎯 Procédure ciblée</h3>', unsafe_allow_html=True)
         
-        # Déterminer le mode de retrieval
-        retrieval_mode = "Hybrid (Vector + Keyword)" if st.session_state.hybrid_retriever else "Vector Only"
+        current_procedure = st.session_state.get('selected_procedure', 'Toutes les procédures')
         
-        st.markdown(f"""
-        <div class="info-card">
-            <p style="margin:0.25rem 0;"><strong>Modèle:</strong> {MODEL_NAME}</p>
-            <p style="margin:0.25rem 0;"><strong>Provider:</strong> {LLM_PROVIDER}</p>
-            <p style="margin:0.25rem 0;"><strong>Retrieval:</strong> {retrieval_mode}</p>
-            <p style="margin:0.25rem 0;"><strong>Température:</strong> {TEMPERATURE}</p>
-            <p style="margin:0.25rem 0;"><strong>Documents par requête:</strong> {TOP_K}</p>
-        </div>
-        """, unsafe_allow_html=True)
+        # Affichage de la procédure actuelle
+        if current_procedure == "Toutes les procédures":
+            st.markdown(f"""
+            <div class="info-card">
+                <p style="margin:0; text-align:center;">
+                    <strong>📚 Recherche générale</strong><br>
+                    <span style="font-size: 0.9rem; color: var(--text-secondary);">
+                        Toutes les procédures
+                    </span>
+                </p>
+            </div>
+            """, unsafe_allow_html=True)
+        else:
+            st.markdown(f"""
+            <div class="success-card">
+                <p style="margin:0; text-align:center;">
+                    <strong>✓ Recherche ciblée</strong><br>
+                    <span style="font-size: 0.9rem;">
+                        {current_procedure}
+                    </span>
+                </p>
+            </div>
+            """, unsafe_allow_html=True)
+        
+        # Bouton pour changer de procédure
+        if st.button("🔄 Changer de procédure", use_container_width=True):
+            # Réinitialiser pour revenir à l'écran de sélection
+            st.session_state.consent_given = False
+            st.session_state.loading_complete = False
+            st.session_state.messages = []
+            st.session_state.qa_chain = None
+            st.session_state.vector_store = None
+            st.session_state.hybrid_retriever = None
+            st.rerun()
         
         st.divider()
         
@@ -918,7 +1131,7 @@ def main():
     """
     # Configuration de la page
     st.set_page_config(
-        page_title="Assistant médical - Embolisation prostate",
+        page_title="Assistant médical - Radiologie Interventionnelle",
         page_icon="⚕",  # Medical symbol (logo acceptable)
         layout="wide",
         initial_sidebar_state="expanded"
